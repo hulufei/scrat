@@ -71,6 +71,53 @@ function makeComponentModulesAlias(componentFile, map, ret) {
     }
 }
 
+/**
+ * 解析文件中的 require.async，抽取当前文件 require 的依赖
+ *
+ * 约定：
+ * - 处理的文件对 require.async 只调用一次
+ * - require.async 必须包含一个回调函数
+ *
+ * @param content 要处理的文件内容
+ * @param map scrat生成的map json对象
+ * @return required map json
+ */
+function required(content, map) {
+    // DO use [\s\S] instead of . for multiline matching
+    var asyncRegex = /require\s*\.\s*async\s*\(([\s\S]+),\s*function/;
+    var matches = content.match(asyncRegex);
+    var requiredMap;
+
+    // Set required map by required module name
+    function setMap(name) {
+        var id = map.alias[name];
+        var deps;
+        if (id) {
+            requiredMap.alias[name] = id;
+            deps = map.deps[id];
+            if (deps) {
+                requiredMap.deps[id] = deps;
+                deps.forEach(setMap);
+            }
+        }
+    }
+
+    if (matches) {
+        requiredMap = JSON.parse(JSON.stringify(map));
+        requiredMap.alias = {};
+        requiredMap.deps = {};
+        matches[1]
+            // Clean comments
+            .replace(/(?:\/\*(?:[\s\S]*?)\*\/)|(?:\/\/(?:.*)$)/gm, '')
+            // Clean names (string/array)
+            .replace(/['"\[\]\s]/g, '')
+            .split(',')
+            .forEach(setMap);
+        return requiredMap;
+    }
+    return map;
+}
+
 module.exports = function (ret, conf, settings, opt){
     var map = fis.config.get('framework', {});
     var aliasConfig = map.alias || {};
@@ -158,8 +205,11 @@ module.exports = function (ret, conf, settings, opt){
     } else {
         map.cache = false;
     }
-    var stringify = JSON.stringify(map, null, opt.optimize ? null : 4);
+    // var stringify = JSON.stringify(map, null, opt.optimize ? null : 4);
     views.forEach(function(file){
-        file.setContent(file.getContent().replace(/\b__FRAMEWORK_CONFIG__\b/g, stringify));
+        var content = file.getContent();
+        var requiredMap = required(content, map);
+        var stringify = JSON.stringify(requiredMap, null, opt.optimize ? null : 4);
+        file.setContent(content.replace(/\b__FRAMEWORK_CONFIG__\b/g, stringify));
     });
 };
